@@ -1,0 +1,325 @@
+{
+  "name": "SPARKY - Workflow Unique",
+  "nodes": [
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sparky/process",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "trigger-process",
+      "name": "Webhook - Traitement Document",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 100],
+      "webhookId": "sparky-process"
+    },
+
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sparky/notify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "trigger-notify",
+      "name": "Webhook - Notification Email",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "sparky-notify"
+    },
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 7 * * 1-5" }]
+        }
+      },
+      "id": "trigger-rapport",
+      "name": "Cron - Rapport Quotidien (7h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 500]
+    },
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1-5" }]
+        }
+      },
+      "id": "trigger-prix",
+      "name": "Cron - Comparaison Prix (8h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 680]
+    },
+
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1" }]
+        }
+      },
+      "id": "trigger-alerte",
+      "name": "Cron - Alerte Prix (Lundi 9h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 860]
+    },
+
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/process-base64",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Content-Type", "value": "application/json" }]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ file_content_base64: $json.body.file_content_base64, filename: $json.body.filename || 'document', mime_type: $json.body.mime_type || 'application/pdf' }) }}",
+        "options": { "timeout": 60000 }
+      },
+      "id": "node-process",
+      "name": "Appeler SPARKY /process-base64",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 100]
+    },
+
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "node-process-response",
+      "name": "Reponse Process",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [780, 100]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst typeLabel = { 'facture': 'Facture', 'devis': 'Devis', 'bon_livraison': 'Bon de Livraison', 'bon_commande': 'Bon de Commande', 'avoir': 'Avoir' }[body.type_document] || body.type_document || 'Document';\nconst montantHT = body.montant_ht ? Number(body.montant_ht).toFixed(3) + ' TND' : 'N/A';\nconst montantTTC = body.montant_ttc ? Number(body.montant_ttc).toFixed(3) + ' TND' : 'N/A';\nconst confiance = body.score_confiance ? Math.round(body.score_confiance * 100) + '%' : 'N/A';\nconst subject = '[SPARKY] ' + typeLabel + ' scanne - ' + (body.fournisseur || 'Fournisseur inconnu');\n\n// Tableau des articles\nconst lignes = body.lignes || [];\nlet articlesTable = '';\nif (lignes.length > 0) {\n  const rows = lignes.map((l, i) => {\n    const pu = Number(l.prix_unitaire || 0).toFixed(3);\n    const qte = Number(l.quantite || 1);\n    const rem = Number(l.remise || 0);\n    const tva = Number(l.tva || 0);\n    const ttc = Number(l.montant_ttc || 0).toFixed(3);\n    return '<tr style=\"background:' + (i%2===0?'#fff':'#f8f9ff') + '\">'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;font-weight:600;color:#1a1a2e\">' + (l.designation || 'N/A') + '</td>'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;font-family:monospace;font-size:12px;color:#1565c0\">' + (l.reference || '-') + '</td>'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;text-align:center\">' + qte + '</td>'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;text-align:right\">' + pu + ' TND</td>'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;text-align:center\">' + (rem > 0 ? rem + '%' : '-') + '</td>'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;text-align:center\">' + (tva > 0 ? tva + '%' : '-') + '</td>'\n      + '<td style=\"padding:9px 12px;border:1px solid #e0e0e0;text-align:right;font-weight:700;color:#1a1a2e\">' + ttc + ' TND</td>'\n      + '</tr>';\n  }).join('');\n  articlesTable = '<h3 style=\"color:#1a1a2e;font-size:15px;margin:24px 0 12px\">Articles extraits (' + lignes.length + ')</h3>'\n    + '<table style=\"width:100%;border-collapse:collapse;font-size:12px\">'\n    + '<thead><tr style=\"background:#1a1a2e\">'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:left;border:1px solid #333\">Designation</th>'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:left;border:1px solid #333\">Reference</th>'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:center;border:1px solid #333\">Qte</th>'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:right;border:1px solid #333\">Prix U.</th>'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:center;border:1px solid #333\">Rem.</th>'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:center;border:1px solid #333\">TVA</th>'\n    + '<th style=\"padding:10px 12px;color:#f5c518;text-align:right;border:1px solid #333\">TTC</th>'\n    + '</tr></thead><tbody>' + rows + '</tbody>'\n    + '<tfoot><tr style=\"background:#f0f4ff\">'\n    + '<td colspan=\"6\" style=\"padding:10px 12px;font-weight:700;color:#1a1a2e;border:1px solid #e0e0e0\">TOTAL TTC</td>'\n    + '<td style=\"padding:10px 12px;font-weight:800;font-size:15px;color:#1a1a2e;text-align:right;border:1px solid #e0e0e0\">' + montantTTC + '</td>'\n    + '</tr></tfoot></table>';\n} else {\n  articlesTable = '<p style=\"color:#888;font-style:italic;margin:16px 0\">Aucun article extrait pour ce document.</p>';\n}\n\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:800px;margin:0 auto\">'\n  + '<div style=\"background:#1a1a2e;padding:24px;border-radius:12px 12px 0 0;text-align:center\">'\n  + '<h1 style=\"color:#f5c518;margin:0;font-size:26px\">SPARKY</h1>'\n  + '<p style=\"color:rgba(255,255,255,.6);margin:4px 0 0;font-size:13px\">Nouveau document scanne</p>'\n  + '</div>'\n  + '<div style=\"background:#fff;padding:28px;border:1px solid #e0e0e0\">'\n  + '<table style=\"width:100%;border-collapse:collapse;margin-bottom:8px\">'\n  + '<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:10px 0;color:#888;font-size:13px;width:140px\">Type</td><td style=\"padding:10px 0;font-weight:700;color:#1a1a2e\">' + typeLabel + '</td></tr>'\n  + '<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:10px 0;color:#888;font-size:13px\">Fichier</td><td style=\"padding:10px 0;color:#555\">' + (body.nom_fichier || 'N/A') + '</td></tr>'\n  + '<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:10px 0;color:#888;font-size:13px\">Fournisseur</td><td style=\"padding:10px 0;font-weight:700;color:#1a1a2e\">' + (body.fournisseur || 'N/A') + '</td></tr>'\n  + '<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:10px 0;color:#888;font-size:13px\">Numero</td><td style=\"padding:10px 0;font-family:monospace;color:#1565c0\">' + (body.numero_document || 'N/A') + '</td></tr>'\n  + '<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:10px 0;color:#888;font-size:13px\">Montant HT</td><td style=\"padding:10px 0;font-weight:700;color:#555\">' + montantHT + '</td></tr>'\n  + '<tr style=\"border-bottom:1px solid #f0f0f0\"><td style=\"padding:10px 0;color:#888;font-size:13px\">Montant TTC</td><td style=\"padding:10px 0;font-size:20px;font-weight:800;color:#1a1a2e\">' + montantTTC + '</td></tr>'\n  + '<tr><td style=\"padding:10px 0;color:#888;font-size:13px\">Confiance OCR</td><td style=\"padding:10px 0;font-weight:700;color:#1565c0\">' + confiance + '</td></tr>'\n  + '</table>'\n  + articlesTable\n  + '</div>'\n  + '<div style=\"background:#f5f5f5;padding:16px;border-radius:0 0 12px 12px;text-align:center\">'\n  + '<p style=\"margin:0;color:#aaa;font-size:12px\">SPARKY v1.0 - ' + new Date().toLocaleString('fr-TN') + '</p>'\n  + '</div></div>';\nreturn [{ json: { subject, htmlBody } }];"
+      },
+      "id": "node-prepare-email",
+      "name": "Preparer Email Notification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 300]
+    },
+
+    {
+      "parameters": {
+        "sendTo": "mahmoud.elloumi@enis.tn",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "id": "node-email-notify",
+      "name": "Email - Notification Document",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [780, 300],
+      "credentials": {
+        "smtp": { "id": "smtp-sparky", "name": "SPARKY SMTP" }
+      }
+    },
+
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"email_sent\" }"
+      },
+      "id": "node-notify-response",
+      "name": "Reponse Notification",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1020, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8000/articles/stock",
+        "options": { "timeout": 15000 }
+      },
+      "id": "node-get-stock",
+      "name": "GET Stock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 500]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const articles = Array.isArray($input.first().json) ? $input.first().json : [];\nconst total = articles.reduce((acc, a) => acc + (Number(a.quantite_stock||0) * Number(a.prix_unitaire||0)), 0);\nconst date = new Date().toLocaleDateString('fr-FR', {weekday:'long',year:'numeric',month:'long',day:'numeric'});\nconst rows = articles.slice(0,20).map((a,i) => '<tr style=\"background:' + (i%2===0?'#fff':'#f9f9f9') + '\"><td style=\"padding:8px 12px;border:1px solid #e0e0e0;font-weight:600\">' + (a.designation||a.nom||'N/A') + '</td><td style=\"padding:8px 12px;border:1px solid #e0e0e0;font-family:monospace;font-size:12px;color:#1565c0\">' + (a.reference||'N/A') + '</td><td style=\"padding:8px 12px;border:1px solid #e0e0e0;text-align:right\">' + (a.quantite_stock||0) + '</td><td style=\"padding:8px 12px;border:1px solid #e0e0e0;text-align:right;font-weight:700\">' + Number(a.prix_unitaire||0).toFixed(3) + ' TND</td></tr>').join('');\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto\"><div style=\"background:#1a1a2e;padding:24px;border-radius:12px 12px 0 0;text-align:center\"><h1 style=\"color:#f5c518;margin:0\">SPARKY</h1><p style=\"color:rgba(255,255,255,.6);margin:4px 0 0\">Rapport Quotidien - ' + date + '</p></div><div style=\"background:#fff;padding:28px;border:1px solid #e0e0e0\"><h2 style=\"color:#1a1a2e;margin:0 0 20px\">Tableau de bord</h2><div style=\"display:flex;gap:16px;margin-bottom:24px\"><div style=\"flex:1;background:#f0f4ff;border-radius:10px;padding:16px;border-left:4px solid #1565c0\"><p style=\"margin:0;font-size:11px;color:#888;font-weight:700;text-transform:uppercase\">Articles en stock</p><p style=\"margin:8px 0 0;font-size:28px;font-weight:800;color:#1565c0\">' + articles.length + '</p></div><div style=\"flex:1;background:#e8f5e9;border-radius:10px;padding:16px;border-left:4px solid #388e3c\"><p style=\"margin:0;font-size:11px;color:#888;font-weight:700;text-transform:uppercase\">Valeur estimee</p><p style=\"margin:8px 0 0;font-size:22px;font-weight:800;color:#2e7d32\">' + total.toFixed(3) + ' TND</p></div></div><table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#1a1a2e\"><th style=\"padding:10px 12px;color:#f5c518;text-align:left;border:1px solid #333\">Designation</th><th style=\"padding:10px 12px;color:#f5c518;text-align:left;border:1px solid #333\">Reference</th><th style=\"padding:10px 12px;color:#f5c518;text-align:right;border:1px solid #333\">Qte</th><th style=\"padding:10px 12px;color:#f5c518;text-align:right;border:1px solid #333\">Prix</th></tr></thead><tbody>' + rows + '</tbody></table></div><div style=\"background:#f5f5f5;padding:16px;border-radius:0 0 12px 12px;text-align:center\"><p style=\"margin:0;color:#aaa;font-size:12px\">Genere par SPARKY n8n</p></div></div>';\nreturn [{ json: { htmlBody, nb: articles.length } }];"
+      },
+      "id": "node-build-rapport",
+      "name": "Construire Rapport",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 500]
+    },
+
+    {
+      "parameters": {
+        "sendTo": "mahmoud.elloumi@enis.tn",
+        "subject": "=[SPARKY] Rapport quotidien - {{ new Date().toLocaleDateString('fr-FR') }}",
+        "emailType": "html",
+        "message": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "id": "node-email-rapport",
+      "name": "Email - Rapport Quotidien",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1020, 500],
+      "credentials": {
+        "smtp": { "id": "smtp-sparky", "name": "SPARKY SMTP" }
+      }
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8000/articles/comparaison-prix",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-get-comparaison",
+      "name": "GET Comparaison Prix",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 680]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst articles = data.articles || [];\nif (articles.length === 0) return [{ json: { skip: true, htmlBody: '', subject: '' } }];\nconst fournisseurs = (articles[0]?.prix_par_fournisseur || []).map(p => p.fournisseur || 'N/A');\nconst headers = fournisseurs.map(f => '<th style=\"padding:10px 12px;background:#1a1a2e;color:#f5c518;border:1px solid #333\">' + f + '</th>').join('');\nconst rows = articles.map(art => { const prix = art.prix_par_fournisseur || []; const minPrix = prix.length > 0 ? Math.min(...prix.map(p => Number(p.prix_unitaire)||Infinity)) : null; const cellules = prix.map(p => { const pu = Number(p.prix_unitaire)||0; const best = minPrix !== null && Math.abs(pu-minPrix) < 0.001; return '<td style=\"padding:8px 12px;border:1px solid #e0e0e0;' + (best ? 'background:#e8f5e9;color:#2e7d32;font-weight:700' : 'color:#333') + '\">' + pu.toFixed(3) + ' TND' + (best ? ' [V]' : '') + '</td>'; }).join(''); return '<tr><td style=\"padding:8px 12px;border:1px solid #e0e0e0;font-weight:600\">' + (art.designation||'N/A') + '</td>' + cellules + '</tr>'; }).join('');\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:800px;margin:0 auto\"><div style=\"background:#1a1a2e;padding:24px;border-radius:12px 12px 0 0;text-align:center\"><h1 style=\"color:#f5c518;margin:0\">SPARKY</h1><p style=\"color:rgba(255,255,255,.6);margin:4px 0 0\">Comparaison des Prix Fournisseurs</p></div><div style=\"background:#fff;padding:28px;border:1px solid #e0e0e0\"><p style=\"color:#555;font-size:13px;margin:0 0 16px\">[V] = meilleur prix pour cet article</p><table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr><th style=\"padding:10px 12px;background:#1a1a2e;color:#f5c518;text-align:left;border:1px solid #333\">Article</th>' + headers + '</tr></thead><tbody>' + rows + '</tbody></table></div><div style=\"background:#f5f5f5;padding:16px;border-radius:0 0 12px 12px;text-align:center\"><p style=\"margin:0;color:#aaa;font-size:12px\">Genere par SPARKY n8n</p></div></div>';\nreturn [{ json: { htmlBody, skip: false, subject: '[SPARKY] Comparaison prix - ' + new Date().toLocaleDateString('fr-FR') } }];"
+      },
+      "id": "node-build-comparaison",
+      "name": "Construire Comparaison",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 680]
+    },
+
+    {
+      "parameters": {
+        "sendTo": "mahmoud.elloumi@enis.tn",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "id": "node-email-comparaison",
+      "name": "Email - Comparaison Prix",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1020, 680],
+      "credentials": {
+        "smtp": { "id": "smtp-sparky", "name": "SPARKY SMTP" }
+      }
+    },
+
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8000/articles/comparaison-prix",
+        "options": { "timeout": 30000 }
+      },
+      "id": "node-get-alerte",
+      "name": "GET Comparaison Pour Alerte",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [520, 860]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst articles = data.articles || [];\nconst opportunites = [];\nfor (const art of articles) { const fx = (art.prix_par_fournisseur||[]).filter(p => Number(p.prix_unitaire)>0); if (fx.length < 2) continue; const sorted = [...fx].sort((a,b) => Number(a.prix_unitaire)-Number(b.prix_unitaire)); const best = sorted[0]; const worst = sorted[sorted.length-1]; const eco = Number(worst.prix_unitaire) - Number(best.prix_unitaire); if (eco > 0.001) { opportunites.push({ designation: art.designation||'N/A', meilleur: best.fournisseur, best_prix: Number(best.prix_unitaire).toFixed(3), pire: worst.fournisseur, pire_prix: Number(worst.prix_unitaire).toFixed(3), pct: ((eco/Number(worst.prix_unitaire))*100).toFixed(1), eco_totale: (eco*Number(art.quantite_stock||1)).toFixed(3) }); } }\nif (opportunites.length === 0) return [{ json: { skip: true, htmlBody: '', subject: '' } }];\nconst total = opportunites.reduce((acc,o) => acc+Number(o.eco_totale), 0).toFixed(3);\nconst rows = opportunites.map((o,i) => '<tr style=\"background:' + (i%2===0?'#fff':'#f9f9f9') + '\"><td style=\"padding:10px 12px;border:1px solid #e0e0e0;font-weight:600\">' + o.designation + '</td><td style=\"padding:10px 12px;border:1px solid #e0e0e0;background:#e8f5e9\"><strong style=\"color:#2e7d32\">' + o.meilleur + '</strong><br><span style=\"font-weight:800\">' + o.best_prix + ' TND</span></td><td style=\"padding:10px 12px;border:1px solid #e0e0e0;background:#ffebee\"><span style=\"color:#b71c1c\">' + o.pire + '</span><br><span>' + o.pire_prix + ' TND</span></td><td style=\"padding:10px 12px;border:1px solid #e0e0e0;text-align:center\"><span style=\"background:#f57c00;color:#fff;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700\">-' + o.pct + '%</span></td><td style=\"padding:10px 12px;border:1px solid #e0e0e0;text-align:right;font-weight:700;color:#2e7d32\">' + o.eco_totale + ' TND</td></tr>').join('');\nconst htmlBody = '<div style=\"font-family:Arial,sans-serif;max-width:900px;margin:0 auto\"><div style=\"background:#1a1a2e;padding:24px;border-radius:12px 12px 0 0;text-align:center\"><h1 style=\"color:#f5c518;margin:0\">SPARKY</h1><p style=\"color:rgba(255,255,255,.6);margin:4px 0 0\">Alerte Meilleur Prix</p></div><div style=\"background:#fff;padding:28px;border:1px solid #e0e0e0\"><div style=\"background:#e8f5e9;border-radius:10px;padding:16px;border-left:4px solid #388e3c;margin-bottom:20px\"><h2 style=\"margin:0 0 8px;color:#1b5e20\">' + opportunites.length + ' opportunite(s) d economie</h2><p style=\"margin:0;color:#2e7d32;font-size:15px\">Economie potentielle : <strong>' + total + ' TND</strong></p></div><table style=\"width:100%;border-collapse:collapse;font-size:13px\"><thead><tr style=\"background:#1a1a2e\"><th style=\"padding:10px 12px;color:#f5c518;text-align:left;border:1px solid #333\">Article</th><th style=\"padding:10px 12px;color:#f5c518;border:1px solid #333\">Meilleur Prix</th><th style=\"padding:10px 12px;color:#f5c518;border:1px solid #333\">Prix Actuel</th><th style=\"padding:10px 12px;color:#f5c518;text-align:center;border:1px solid #333\">Ecart</th><th style=\"padding:10px 12px;color:#f5c518;text-align:right;border:1px solid #333\">Economie</th></tr></thead><tbody>' + rows + '</tbody><tfoot><tr><td colspan=\"4\" style=\"padding:12px;font-weight:700;border:1px solid #e0e0e0\">TOTAL ECONOMIES</td><td style=\"padding:12px;font-weight:800;color:#2e7d32;font-size:16px;text-align:right;border:1px solid #e0e0e0\">' + total + ' TND</td></tr></tfoot></table></div><div style=\"background:#f5f5f5;padding:16px;border-radius:0 0 12px 12px;text-align:center\"><p style=\"margin:0;color:#aaa;font-size:12px\">Genere par SPARKY n8n</p></div></div>';\nreturn [{ json: { htmlBody, skip: false, subject: '[SPARKY] Alerte prix - ' + opportunites.length + ' opportunite(s) - ' + total + ' TND d economie' } }];"
+      },
+      "id": "node-build-alerte",
+      "name": "Construire Alerte Prix",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [780, 860]
+    },
+
+    {
+      "parameters": {
+        "sendTo": "mahmoud.elloumi@enis.tn",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.htmlBody }}",
+        "options": {}
+      },
+      "id": "node-email-alerte",
+      "name": "Email - Alerte Prix",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1020, 860],
+      "credentials": {
+        "smtp": { "id": "smtp-sparky", "name": "SPARKY SMTP" }
+      }
+    }
+
+  ],
+
+  "connections": {
+    "Webhook - Traitement Document": {
+      "main": [[{ "node": "Appeler SPARKY /process-base64", "type": "main", "index": 0 }]]
+    },
+    "Appeler SPARKY /process-base64": {
+      "main": [[{ "node": "Reponse Process", "type": "main", "index": 0 }]]
+    },
+    "Webhook - Notification Email": {
+      "main": [[{ "node": "Preparer Email Notification", "type": "main", "index": 0 }]]
+    },
+    "Preparer Email Notification": {
+      "main": [[{ "node": "Email - Notification Document", "type": "main", "index": 0 }]]
+    },
+    "Email - Notification Document": {
+      "main": [[{ "node": "Reponse Notification", "type": "main", "index": 0 }]]
+    },
+    "Cron - Rapport Quotidien (7h)": {
+      "main": [[{ "node": "GET Stock", "type": "main", "index": 0 }]]
+    },
+    "GET Stock": {
+      "main": [[{ "node": "Construire Rapport", "type": "main", "index": 0 }]]
+    },
+    "Construire Rapport": {
+      "main": [[{ "node": "Email - Rapport Quotidien", "type": "main", "index": 0 }]]
+    },
+    "Cron - Comparaison Prix (8h)": {
+      "main": [[{ "node": "GET Comparaison Prix", "type": "main", "index": 0 }]]
+    },
+    "GET Comparaison Prix": {
+      "main": [[{ "node": "Construire Comparaison", "type": "main", "index": 0 }]]
+    },
+    "Construire Comparaison": {
+      "main": [[{ "node": "Email - Comparaison Prix", "type": "main", "index": 0 }]]
+    },
+    "Cron - Alerte Prix (Lundi 9h)": {
+      "main": [[{ "node": "GET Comparaison Pour Alerte", "type": "main", "index": 0 }]]
+    },
+    "GET Comparaison Pour Alerte": {
+      "main": [[{ "node": "Construire Alerte Prix", "type": "main", "index": 0 }]]
+    },
+    "Construire Alerte Prix": {
+      "main": [[{ "node": "Email - Alerte Prix", "type": "main", "index": 0 }]]
+    }
+  },
+
+  "settings": { "executionOrder": "v1" },
+  "tags": ["sparky"],
+  "meta": {
+    "description": "Workflow unique SPARKY : traitement document (webhook), notification email (webhook), rapport quotidien (cron 7h), comparaison prix (cron 8h), alerte meilleur prix (cron lundi 9h)."
+  }
+}

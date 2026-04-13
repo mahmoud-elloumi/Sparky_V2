@@ -1,0 +1,113 @@
+================================================================================
+                    RAPPORT DE PROJET — SPARKY
+       Système Intelligent de Gestion des Documents Photovoltaïques
+================================================================================
+
+
+1. PRÉSENTATION GÉNÉRALE
+-------------------------
+SPARKY est une application web développée dans le cadre d'un projet de fin
+d'années (PFA) destinée aux entreprises du secteur photovoltaïque en Tunisie.
+Elle automatise la gestion, l'analyse et la comparaison des documents
+commerciaux (factures, devis, bons de livraison, bons de commande, avoirs)
+grâce à l'intelligence artificielle.
+
+
+2. ARCHITECTURE TECHNIQUE
+--------------------------
+
+Backend — Python / FastAPI
+  - FastAPI          : API REST asynchrone
+  - Mistral AI       : OCR intelligent et extraction structurée des données
+  - pdfplumber       : extraction de texte depuis les PDF
+  - pydantic         : validation et modélisation des données
+  - structlog        : journalisation structurée
+  - openpyxl         : génération de fichiers Excel
+
+Frontend — Angular 17
+  - Angular 17       : framework frontend avec Signals pour la réactivité
+  - Angular Material : interface utilisateur moderne
+  - localStorage     : persistance des documents côté client
+
+
+3. FONCTIONNALITÉS DÉVELOPPÉES
+--------------------------------
+
+3.1 Scanner de documents
+  - Import de fichiers PDF, JPG, PNG par glisser-déposer ou sélection
+  - Classification automatique du type de document par Mistral AI
+  - Extraction intelligente des données structurées
+    (fournisseur, numéro, date, montant, articles)
+  - Affichage du tableau des articles avec référence, désignation,
+    quantité, prix unitaire, remise, TVA, montant HT et TTC
+  - Export des articles en fichier Excel avec mise en forme
+
+3.2 Gestion des documents
+  - Liste de tous les documents scannés avec filtrage par type
+  - Persistance des données dans le navigateur (localStorage)
+  - Affichage des informations générales :
+    fournisseur, numéro, montant TTC, statut
+
+3.3 Comparateur des prix multi-fournisseurs
+  - Import de plusieurs devis ou factures de fournisseurs différents
+  - Extraction automatique des articles sans saisie manuelle
+  - Tableau croisé articles x fournisseurs
+  - Meilleur prix par article mis en évidence en vert
+  - Calcul du total TTC par fournisseur (PU x Qté x remise x TVA)
+  - Identification automatique du fournisseur le moins cher
+
+3.4 Catalogue des prix fournisseurs
+  - Vue centralisée des prix par article et par fournisseur
+  - Affichage du stock disponible
+  - Export CSV
+
+3.5 Tableau de bord
+  - Statistiques générales : nombre de factures, devis,
+    bons de livraison, etc.
+  - Actions rapides vers les fonctionnalités principales
+
+
+4. PIPELINE D'EXTRACTION IA
+-----------------------------
+
+  Document (PDF / Image)
+          |
+          v
+  1. Google Document AI  (si configuré)
+          |
+          v
+  2. Mistral AI  — pixtral-12b (images) / mistral-small (PDF)
+          |
+          v
+  3. pdfplumber + Regex  (fallback)
+          |
+          v
+  Données structurées JSON
+
+
+5. TECHNOLOGIES UTILISÉES
+---------------------------
+
+  Couche       | Technologie
+  -------------|-------------------------------------------
+  Frontend     | Angular 17, Angular Material
+  Backend      | Python 3.12, FastAPI, Uvicorn
+  IA / OCR     | Mistral AI (pixtral-12b-2409, mistral-small-latest)
+  PDF          | pdfplumber
+  Export       | openpyxl
+  Stockage     | Supabase (optionnel), localStorage
+
+
+6. RÉSULTATS
+-------------
+  - Réduction du temps de saisie manuelle grâce à l'extraction
+    automatique par IA
+  - Comparaison objective et instantanée des offres fournisseurs
+  - Interface intuitive adaptée aux besoins des entreprises
+    photovoltaïques tunisiennes
+
+
+================================================================================
+  Projet réalisé par : [Votre nom]        Année universitaire : 2025/2026
+  Encadrant          : [Nom de l'encadrant]
+================================================================================
