@@ -1,147 +1,188 @@
 # SPARKY — Intégration n8n
-
-## Architecture
-
-```
-┌─────────────────┐     HTTP      ┌──────────────────┐
-│   n8n           │ ◄──────────── │  FastAPI Backend  │
-│  :5678          │ ──────────►   │  :8000            │
-└─────────────────┘               └──────────────────┘
-         │                                 │
-         │ Webhooks                        │ Mistral AI
-         │ Cron Jobs                       │ Google DocAI
-         │ Email Alerts                    │ SQLite DB
-         ▼                                 ▼
-   [Notifications]                  [Documents traités]
-```
+## Guide complet de l'architecture et des outils IA
 
 ---
 
-## Démarrage rapide
+## 1. Outils IA utilisés (réellement actifs)
 
-### Option 1 — Docker Compose (recommandé)
+### Backend — Moteurs d'intelligence artificielle
 
-```bash
-# 1. Créer le fichier .env à la racine du projet
-cp .env.example .env
-# Remplir MISTRAL_API_KEY et ALERT_EMAIL
+| Outil | Version | Rôle | Quand utilisé |
+|-------|---------|------|---------------|
+| **Mistral AI — pixtral-12b-2409** | mistralai 1.5.0 | Classification + Extraction images | Fichiers JPEG, PNG, TIFF |
+| **Mistral AI — mistral-small-latest** | mistralai 1.5.0 | Classification + Extraction texte | Fichiers PDF |
+| **Google Document AI** | google-cloud-documentai 2.29.0 | Classification prioritaire | Si clé Google configurée |
+| **pdfplumber** | — | Extraction texte PDF | Fallback si Mistral échoue |
+| **Regex fallback** | — | Extraction basique | Dernier recours |
 
-# 2. Lancer tout en une commande
-docker-compose up -d
+### Chaîne de traitement (pipeline réel)
 
-# n8n accessible sur : http://localhost:5678
-# API SPARKY sur     : http://localhost:8000
 ```
-
-### Option 2 — n8n en local (sans Docker)
-
-```bash
-# Installer n8n
-npm install -g n8n
-
-# Lancer n8n
-SPARKY_API_URL=http://localhost:8000 ALERT_EMAIL=ton@email.com n8n start
-
-# Accéder à : http://localhost:5678
+Document recu
+    │
+    ├─ Étape 1 : Google Document AI     ← si GOOGLE_PROJECT_ID configuré
+    │            (classification)
+    │
+    ├─ Étape 2 : Mistral AI             ← ACTIF (clé configurée)
+    │   ├─ Image  → pixtral-12b-2409   (vision multimodale)
+    │   └─ PDF    → mistral-small       (analyse texte pdfplumber)
+    │
+    └─ Étape 3 : pdfplumber + regex     ← fallback automatique
 ```
 
 ---
 
-## Connexion à n8n
+## 2. Applications et frameworks utilisés
 
-- URL : http://localhost:5678
-- Login : **admin**
-- Mot de passe : **sparky2026**
+### Backend (Python — FastAPI)
+
+| Composant | Technologie | Version |
+|-----------|-------------|---------|
+| API REST | FastAPI | 0.111.0 |
+| Serveur ASGI | Uvicorn | 0.30.0 |
+| Validation données | Pydantic | 2.7.1 |
+| HTTP client | httpx | 0.27.0 |
+| Logging structuré | structlog | 24.2.0 |
+| IA vision/texte | mistralai | 1.5.0 |
+////OCR cloud | Google Document AI | 2.29.0 |
+| Extraction PDF | pdfplumber | — |
+| Traitement images | Pillow | 10.3.0 |
+
+### Frontend (Angular 17)
+
+| Composant | Technologie |
+|-----------|-------------|
+| Framework | Angular 17 + Signals |
+| UI Components | Angular Material |
+| State management | Signals (computed, signal) |
+| Persistance | localStorage |
+| Animations | CSS @keyframes SCSS |
+
+### Base de données
+
+| Environnement | Technologie | Usage |
+|---------------|-------------|-------|
+| Dev local | LocalStorage (Angular) | Documents scannés (frontend) |
+| Dev local | SQLite (articles_db) | Articles et stock (backend) |
+| n8n | SQLite | Workflows, executions, credentials |
+| Production (prévu) | PostgreSQL | Toutes les données (schema.sql prêt) |
+
+### Automatisation — n8n
+
+| Composant | Role |
+|-----------|------|
+| n8n (latest) | Orchestration workflows |
+| Webhook node | Reception notifications backend |
+| Code node (JS) | Transformation et formatage données |
+| Email Send node | Envoi notifications SMTP |
+| HTTP Request node | Appels API SPARKY |
 
 ---
 
-## Importer les workflows
+## 3. Architecture complète
 
-1. Ouvrir n8n → menu gauche → **Workflows**
-2. Cliquer **Import** (en haut à droite)
-3. Importer chaque fichier JSON du dossier `n8n/workflows/`
+```
+┌─────────────────────────────────────────────────────────┐
+│                    SPARKY ARCHITECTURE                   │
+│                                                         │
+│  [Angular 17]  ──POST /process──►  [FastAPI :8000]     │
+│  localhost:4200                        │                │
+│                              ┌─────────┴──────────┐    │
+│                              │   Pipeline IA       │    │
+│                              │ 1. Google DocAI     │    │
+│                              │ 2. Mistral AI       │    │
+│                              │    pixtral-12b      │    │
+│                              │    mistral-small    │    │
+│                              │ 3. pdfplumber       │    │
+│                              └─────────┬──────────┘    │
+│                                        │                │
+│                         POST /webhook/sparky/notify     │
+│                                        ▼                │
+│                              [n8n :5678]                │
+│                         sparky_pipeline_ia_complet      │
+│                              │                          │
+│                              │ 9 noeuds verts           │
+│                              │ → Email HTML complet     │
+│                              └──────────────────────────│
+└─────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Les 5 Workflows
+## 4. Workflow actif — sparky_pipeline_ia_complet
 
-| Fichier | Nom | Déclencheur | Description |
-|---------|-----|-------------|-------------|
-| `workflow_1_traitement_document.json` | Traitement Document | Webhook POST | Reçoit un document en base64, appelle `/process`, retourne JSON |
-| `workflow_2_notification_email.json` | Notification Email | Webhook POST | Envoie email HTML après traitement d'un document |
-| `workflow_3_comparaison_prix.json` | Comparaison Prix | Cron Lun-Ven 8h | Rapport quotidien des prix par fournisseur par email |
-| `workflow_4_rapport_quotidien.json` | Rapport Quotidien | Cron Lun-Ven 7h | Stats stock + valeur + économies potentielles par email |
-| `workflow_5_alerte_meilleur_prix.json` | Alerte Meilleur Prix | Cron Lundi 9h | Alerte hebdo si un fournisseur propose un meilleur prix |
+**Déclencheur :** `POST http://localhost:5678/webhook/sparky/notify`
+
+**Appelé par :** Backend FastAPI automatiquement après chaque scan
+
+**9 nœuds du workflow :**
+
+| # | Noeud | Type n8n | Fonction |
+|---|-------|----------|----------|
+| 1 | Reception Document | Webhook | Reçoit les données du backend |
+| 2 | Validation et Detection Type | Code JS | Détecte PDF/Image, selectionne modèle IA |
+| 3 | Classification IA (Mistral AI) | Code JS | Formate le résultat de classification |
+| 4 | Resultat Classification | Code JS | Valide type + niveau de confiance |
+| 5 | Extraction Donnees IA (Mistral AI) | Code JS | Compte articles, calcule totaux |
+| 6 | Resultat Extraction | Code JS | Valide données extraites |
+| 7 | Construire Email HTML | Code JS | Génère email HTML complet avec tableau |
+| 8 | Envoyer Email (n8n) | Email Send | Envoie via SMTP |
+| 9 | Reponse Finale | Respond Webhook | Retourne JSON au backend |
 
 ---
 
-## Configuration SMTP (pour les emails)
+## 5. Email envoyé après chaque scan
 
-Dans n8n → **Credentials** → **New** → **SMTP** :
+Contenu de l'email généré automatiquement par n8n :
 
-| Champ | Valeur exemple (Gmail) |
-|-------|----------------------|
+- Barre pipeline IA visuelle : Reception → Detection → Classification → Extraction → Notification
+- Résultat classification : type document + score de confiance + niveau (Elevé/Moyen/Faible)
+- Informations extraites : fournisseur, numéro, date, montant HT/TVA/TTC
+- Tableau complet des articles : désignation, référence, quantité, prix unitaire, remise, TVA, TTC
+- Moteur IA utilisé : Mistral Vision (pixtral-12b) ou Mistral Small selon le type de fichier
+
+---
+
+## 6. Démarrage du projet
+
+```powershell
+# Terminal 1 — Backend
+cd c:\Sparky\backend
+.\start.bat
+
+# Terminal 2 — Frontend
+cd c:\Sparky\frontend
+npm start
+
+# Terminal 3 — n8n
+n8n start
+```
+
+**URLs :**
+- Application  : http://localhost:4200
+- API Backend  : http://localhost:8000
+- n8n Dashboard: http://localhost:5678
+
+---
+
+## 7. Configuration requise (.env)
+
+```env
+MISTRAL_API_KEY=AlSTFcTTm2h5Lkizs3XoXkdiYnDSmZiu
+MISTRAL_MODEL=mistral-small-latest
+MISTRAL_VISION_MODEL=pixtral-12b-2409
+N8N_WEBHOOK_URL=http://localhost:5678/webhook/sparky/notify
+```
+
+---
+
+## 8. Credential SMTP dans n8n
+
+| Champ | Valeur |
+|-------|--------|
+| Nom | SPARKY SMTP |
 | Host | smtp.gmail.com |
 | Port | 587 |
-| User | ton-email@gmail.com |
-| Password | mot de passe application |
 | SSL/TLS | STARTTLS |
-
-> Pour Gmail : activer "Mots de passe des applications" dans les paramètres Google.
-
-Nommer la credential : **SPARKY SMTP** (nom exact utilisé dans les workflows).
-
----
-
-## Tester le Workflow 1 (Traitement document)
-
-```bash
-# Encoder un PDF en base64
-base64 -i mon_document.pdf > doc_b64.txt
-
-# Appeler le webhook n8n
-curl -X POST http://localhost:5678/webhook/sparky/process \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"file_content_base64\": \"$(cat doc_b64.txt)\",
-    \"filename\": \"facture.pdf\",
-    \"mime_type\": \"application/pdf\"
-  }"
-```
-
-## Tester le Workflow 2 (Notification email)
-
-```bash
-curl -X POST http://localhost:5678/webhook/sparky/notify \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type_document": "facture",
-    "fournisseur": "SOTUDERPV",
-    "numero_facture": "FAC-2026-001",
-    "montant_ttc": "1250.500",
-    "score_confiance": 0.94,
-    "lignes": [{"designation": "Panneau 400W"}]
-  }'
-```
-
----
-
-## Variables d'environnement
-
-| Variable | Description | Exemple |
-|----------|-------------|---------|
-| `SPARKY_API_URL` | URL du backend SPARKY | `http://localhost:8000` |
-| `ALERT_EMAIL` | Email destinataire des alertes | `admin@sparky.tn` |
-| `MISTRAL_API_KEY` | Clé API Mistral AI | `AlSTF...` |
-
----
-
-## Fonctionnalités couvertes sans modifier le code
-
-| Fonctionnalité SPARKY | Automatisation n8n |
-|----------------------|-------------------|
-| Scanner un document | W1 : Webhook → `/process` |
-| Voir un document traité | W2 : Email notification auto |
-| Comparateur des prix | W3 : Rapport quotidien email |
-| Tableau de bord | W4 : Stats quotidiennes email |
-| Prix fournisseurs | W5 : Alerte hebdo meilleur prix |
+| User | votre-email@gmail.com |
+| Password | Mot de passe application Gmail (16 caractères) |

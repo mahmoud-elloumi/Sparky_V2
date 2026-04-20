@@ -52,6 +52,12 @@ normalizer  = ProductNormalizer()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("sparky_startup", env=settings.app_env)
+    try:
+        from database import init_db
+        await init_db()
+        log.info("db_tables_ready")
+    except Exception as e:
+        log.warning("db_init_failed", error=str(e))
     yield
     log.info("sparky_shutdown")
 
@@ -321,10 +327,14 @@ async def export_excel(request: ExportExcelRequest):
 # ------------------------------------------------------------
 
 @app.post("/process")
-async def process_document(file: UploadFile = File(...)):
+async def process_document(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
     """
     One-shot endpoint: upload, classify, and extract a document.
     Returns classification + extracted data in a single call.
+    Persists result to PostgreSQL automatically.
     """
     # Read file content once, keep in memory
     file_content = await file.read()
@@ -363,11 +373,169 @@ async def process_document(file: UploadFile = File(...)):
     )
     extract_result = await extract_document(extract_req)
 
+    # Notify n8n after scan (fire-and-forget)
+    try:
+        donnees = extract_result.donnees or {}
+        lignes_raw = donnees.get("lignes", []) or []
+        lignes_list = []
+        for l in lignes_raw:
+            if isinstance(l, dict):
+                lignes_list.append({
+                    "designation": l.get("designation", "") or "",
+                    "reference": l.get("reference_fournisseur", l.get("reference", "")) or "",
+                    "quantite": float(l.get("quantite", 1) or 1),
+                    "prix_unitaire": float(l.get("prix_unitaire", 0) or 0),
+                    "remise": float(l.get("remise_pct", l.get("remise", 0)) or 0),
+                    "tva": float(l.get("tva_taux", l.get("tva", 0)) or 0),
+                    "montant_ttc": float(l.get("montant_ttc", 0) or 0),
+                })
+        n8n_payload = {
+            "type_document": classify_result.type_document,
+            "fournisseur": donnees.get("fournisseur_nom") or donnees.get("fournisseur"),
+            "numero_document": donnees.get("numero_facture") or donnees.get("numero_devis") or donnees.get("numero_commande") or donnees.get("numero_bl"),
+            "date_document": str(donnees.get("date_facture") or donnees.get("date_devis") or donnees.get("date_commande") or donnees.get("date_livraison") or ""),
+            "montant_ht": str(donnees.get("montant_ht", 0) or 0),
+            "montant_tva": str(donnees.get("montant_tva", 0) or 0),
+            "montant_ttc": str(donnees.get("montant_ttc", 0) or 0),
+            "score_confiance": classify_result.score_confiance,
+            "modele_ia": classify_result.modele_version,
+            "nom_fichier": nom_fichier,
+            "mime_type": mime_type,
+            "lignes": lignes_list,
+        }
+        await _notify_n8n(n8n_payload)
+    except Exception as e:
+        log.warning("n8n_process_notify_failed", error=str(e))
+
+    # Save to PostgreSQL (best-effort — ne bloque pas si DB indisponible)
+    try:
+        await _save_document_to_db(
+            db=db,
+            document_id=document_id,
+            nom_fichier=nom_fichier,
+            storage_url=storage_url,
+            classify_result=classify_result,
+            extract_result=extract_result,
+        )
+    except Exception as e:
+        log.warning("db_save_failed", error=str(e))
+
     return {
         "upload": upload_result,
         "classification": classify_result,
         "extraction": extract_result,
     }
+
+
+# ============================================================
+# DOCUMENTS — Lecture depuis PostgreSQL
+# ============================================================
+
+@app.get("/documents")
+async def get_documents(
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retourne la liste des documents scannés stockés en base PostgreSQL.
+    Inclut fournisseur, montant TTC, numéro et lignes pour chaque document.
+    """
+    from sqlalchemy import text as _text
+
+    try:
+        rows = await db.execute(_text("""
+            SELECT
+                d.id            AS document_id,
+                d.nom_fichier,
+                d.storage_url,
+                d.type_document,
+                d.statut,
+                d.score_confiance,
+                d.created_at,
+                f.nom           AS fournisseur_nom,
+                COALESCE(
+                    fa.montant_ttc, dv.montant_ttc,
+                    bc.montant_ttc, av.montant_ttc
+                )               AS montant_ttc,
+                COALESCE(
+                    fa.montant_ht, dv.montant_ht,
+                    bc.montant_ht, av.montant_ht
+                )               AS montant_ht,
+                COALESCE(
+                    fa.numero_facture, dv.numero_devis,
+                    bc.numero_bc, bl.numero_bl, av.numero_avoir
+                )               AS numero_document
+            FROM documents d
+            LEFT JOIN fournisseurs   f  ON f.id  = d.fournisseur_id
+            LEFT JOIN factures       fa ON fa.document_id = d.id
+            LEFT JOIN devis          dv ON dv.document_id = d.id
+            LEFT JOIN bons_commande  bc ON bc.document_id = d.id
+            LEFT JOIN bons_livraison bl ON bl.document_id = d.id
+            LEFT JOIN avoirs         av ON av.document_id = d.id
+            ORDER BY d.created_at DESC
+            LIMIT :lim
+        """), {"lim": limit})
+
+        documents = []
+        for r in rows.mappings():
+            doc_id = str(r["document_id"])
+
+            # Charger les lignes selon le type
+            lignes = []
+            type_doc = r["type_document"]
+            if type_doc == "facture":
+                lrows = await db.execute(_text("""
+                    SELECT designation, reference, quantite, prix_unitaire,
+                           remise_pct, tva_taux, montant_ttc
+                    FROM lignes_facture lf
+                    JOIN factures fa ON fa.id = lf.facture_id
+                    WHERE fa.document_id = :doc
+                    ORDER BY position
+                """), {"doc": doc_id})
+            elif type_doc == "devis":
+                lrows = await db.execute(_text("""
+                    SELECT designation, reference, quantite, prix_unitaire,
+                           remise_pct, NULL AS tva_taux, montant_ttc
+                    FROM lignes_devis ld
+                    JOIN devis dv ON dv.id = ld.devis_id
+                    WHERE dv.document_id = :doc
+                    ORDER BY position
+                """), {"doc": doc_id})
+            else:
+                lrows = None
+
+            if lrows:
+                for l in lrows.mappings():
+                    lignes.append({
+                        "designation":   l["designation"],
+                        "reference":     l["reference"],
+                        "quantite":      float(l["quantite"] or 0),
+                        "prix_unitaire": float(l["prix_unitaire"] or 0),
+                        "remise":        float(l["remise_pct"] or 0),
+                        "tva":           float(l["tva_taux"] or 0) if l["tva_taux"] else 0,
+                        "montant_ttc":   float(l["montant_ttc"] or 0),
+                    })
+
+            documents.append({
+                "document_id":   doc_id,
+                "nom_fichier":   r["nom_fichier"],
+                "storage_url":   r["storage_url"],
+                "type_document": type_doc,
+                "statut":        r["statut"] or "extracted",
+                "score_confiance": float(r["score_confiance"]) if r["score_confiance"] else None,
+                "fournisseur_nom": r["fournisseur_nom"],
+                "montant_ttc":   float(r["montant_ttc"]) if r["montant_ttc"] else None,
+                "montant_ht":    float(r["montant_ht"]) if r["montant_ht"] else None,
+                "numero_document": r["numero_document"],
+                "lignes":        lignes,
+                "created_at":    r["created_at"].isoformat() if r["created_at"] else None,
+            })
+
+        return documents
+
+    except Exception as e:
+        log.warning("db_get_documents_failed", error=str(e))
+        return []
 
 
 # ============================================================
@@ -594,6 +762,214 @@ async def _upload_to_supabase(
         file_options={"content-type": content_type},
     )
     return client.storage.from_(settings.supabase_bucket).get_public_url(path)
+
+
+async def _save_document_to_db(
+    db: AsyncSession,
+    document_id: str,
+    nom_fichier: str,
+    storage_url: str,
+    classify_result,
+    extract_result,
+) -> None:
+    """Persist scanned document + details (facture/devis/…) to PostgreSQL."""
+    from sqlalchemy import text as _text
+    from datetime import date as _date
+
+    donnees = extract_result.donnees or {}
+    type_doc = classify_result.type_document
+    score = float(classify_result.score_confiance)
+    fournisseur_nom = donnees.get("fournisseur_nom") or donnees.get("fournisseur") or ""
+
+    # 1 — upsert fournisseur
+    fourn_id = None
+    if fournisseur_nom:
+        row = await db.execute(
+            _text("SELECT id FROM fournisseurs WHERE nom = :nom LIMIT 1"),
+            {"nom": fournisseur_nom},
+        )
+        existing = row.fetchone()
+        if existing:
+            fourn_id = str(existing[0])
+        else:
+            fourn_id = str(uuid.uuid4())
+            await db.execute(
+                _text("INSERT INTO fournisseurs (id, nom) VALUES (:id, :nom) ON CONFLICT DO NOTHING"),
+                {"id": fourn_id, "nom": fournisseur_nom},
+            )
+
+    def _parse_date(val) -> str | None:
+        if not val:
+            return None
+        s = str(val)[:10]
+        return s if len(s) == 10 else None
+
+    def _dec(val):
+        try:
+            return float(val) if val is not None else None
+        except Exception:
+            return None
+
+    # 2 — insert document (CAST évite le conflit entre :param et :: de PostgreSQL)
+    await db.execute(
+        _text("""
+            INSERT INTO documents
+                (id, nom_fichier, storage_url, type_document, statut, score_confiance, fournisseur_id)
+            VALUES
+                (:id, :nom, :url,
+                 CAST(:type AS document_type),
+                 CAST('extracted' AS document_status),
+                 :score, :fourn)
+            ON CONFLICT (id) DO NOTHING
+        """),
+        {
+            "id": document_id,
+            "nom": nom_fichier,
+            "url": storage_url,
+            "type": str(type_doc),
+            "score": score,
+            "fourn": fourn_id,
+        },
+    )
+
+    # 3 — insert type-specific table
+    lignes = donnees.get("lignes", []) or []
+
+    if type_doc == "facture":
+        fac_id = str(uuid.uuid4())
+        await db.execute(
+            _text("""
+                INSERT INTO factures
+                    (id, document_id, fournisseur_id, numero_facture, date_facture,
+                     montant_ht, montant_tva, montant_ttc, devise)
+                VALUES
+                    (:id, :doc, :fourn, :num,
+                     CAST(:dt AS date),
+                     :ht, :tva, :ttc, 'TND')
+            """),
+            {
+                "id": fac_id, "doc": document_id, "fourn": fourn_id,
+                "num": donnees.get("numero_facture"),
+                "dt":  _parse_date(donnees.get("date_facture")),
+                "ht":  _dec(donnees.get("montant_ht")),
+                "tva": _dec(donnees.get("montant_tva")),
+                "ttc": _dec(donnees.get("montant_ttc")),
+            },
+        )
+        for i, l in enumerate(lignes):
+            await db.execute(
+                _text("""
+                    INSERT INTO lignes_facture
+                        (id, facture_id, designation, reference, quantite,
+                         prix_unitaire, remise_pct, tva_taux, montant_ttc, position)
+                    VALUES
+                        (:id, :fac, :des, :ref, :qty, :pu, :rem, :tva, :ttc, :pos)
+                """),
+                {
+                    "id": str(uuid.uuid4()), "fac": fac_id,
+                    "des": l.get("designation") or "N/A",
+                    "ref": l.get("reference_fournisseur") or l.get("reference"),
+                    "qty": _dec(l.get("quantite")),
+                    "pu":  _dec(l.get("prix_unitaire")),
+                    "rem": _dec(l.get("remise_pct") or l.get("remise")),
+                    "tva": _dec(l.get("tva_taux") or l.get("tva")),
+                    "ttc": _dec(l.get("montant_ttc")),
+                    "pos": i,
+                },
+            )
+
+    elif type_doc == "devis":
+        dev_id = str(uuid.uuid4())
+        await db.execute(
+            _text("""
+                INSERT INTO devis
+                    (id, document_id, fournisseur_id, numero_devis, date_devis,
+                     montant_ht, montant_ttc, devise)
+                VALUES
+                    (:id, :doc, :fourn, :num, CAST(:dt AS date), :ht, :ttc, 'TND')
+            """),
+            {
+                "id": dev_id, "doc": document_id, "fourn": fourn_id,
+                "num": donnees.get("numero_devis"),
+                "dt":  _parse_date(donnees.get("date_devis")),
+                "ht":  _dec(donnees.get("montant_ht")),
+                "ttc": _dec(donnees.get("montant_ttc")),
+            },
+        )
+        for i, l in enumerate(lignes):
+            await db.execute(
+                _text("""
+                    INSERT INTO lignes_devis
+                        (id, devis_id, designation, reference, quantite,
+                         prix_unitaire, remise_pct, montant_ttc, position)
+                    VALUES
+                        (:id, :dev, :des, :ref, :qty, :pu, :rem, :ttc, :pos)
+                """),
+                {
+                    "id": str(uuid.uuid4()), "dev": dev_id,
+                    "des": l.get("designation") or "N/A",
+                    "ref": l.get("reference_fournisseur") or l.get("reference"),
+                    "qty": _dec(l.get("quantite")),
+                    "pu":  _dec(l.get("prix_unitaire")),
+                    "rem": _dec(l.get("remise_pct") or l.get("remise")),
+                    "ttc": _dec(l.get("montant_ttc")),
+                    "pos": i,
+                },
+            )
+
+    elif type_doc == "bon_commande":
+        await db.execute(
+            _text("""
+                INSERT INTO bons_commande
+                    (id, document_id, fournisseur_id, numero_bc, date_commande,
+                     montant_ht, montant_ttc, devise)
+                VALUES
+                    (:id, :doc, :fourn, :num, CAST(:dt AS date), :ht, :ttc, 'TND')
+            """),
+            {
+                "id": str(uuid.uuid4()), "doc": document_id, "fourn": fourn_id,
+                "num": donnees.get("numero_commande") or donnees.get("numero_bc"),
+                "dt":  _parse_date(donnees.get("date_commande")),
+                "ht":  _dec(donnees.get("montant_ht")),
+                "ttc": _dec(donnees.get("montant_ttc")),
+            },
+        )
+
+    elif type_doc == "bon_livraison":
+        await db.execute(
+            _text("""
+                INSERT INTO bons_livraison
+                    (id, document_id, fournisseur_id, numero_bl, date_livraison)
+                VALUES
+                    (:id, :doc, :fourn, :num, CAST(:dt AS date))
+            """),
+            {
+                "id": str(uuid.uuid4()), "doc": document_id, "fourn": fourn_id,
+                "num": donnees.get("numero_bl"),
+                "dt":  _parse_date(donnees.get("date_livraison")),
+            },
+        )
+
+    elif type_doc == "avoir":
+        await db.execute(
+            _text("""
+                INSERT INTO avoirs
+                    (id, document_id, fournisseur_id, numero_avoir, date_avoir,
+                     montant_ht, montant_ttc, devise)
+                VALUES
+                    (:id, :doc, :fourn, :num, CAST(:dt AS date), :ht, :ttc, 'TND')
+            """),
+            {
+                "id": str(uuid.uuid4()), "doc": document_id, "fourn": fourn_id,
+                "num": donnees.get("numero_avoir"),
+                "dt":  _parse_date(donnees.get("date_avoir")),
+                "ht":  _dec(donnees.get("montant_ht")),
+                "ttc": _dec(donnees.get("montant_ttc")),
+            },
+        )
+
+    await db.commit()
+    log.info("db.document_saved", document_id=document_id, type=str(type_doc))
 
 
 async def _notify_n8n(payload: dict) -> None:

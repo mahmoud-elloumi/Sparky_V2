@@ -83,6 +83,12 @@ export class ApiService {
       .pipe(catchError(this.handleError));
   }
 
+  getDocuments(limit = 100): Observable<any[]> {
+    return this.http
+      .get<any[]>(`${this.base}/documents?limit=${limit}`)
+      .pipe(catchError(this.handleError));
+  }
+
   health(): Observable<{ status: string }> {
     return this.http
       .get<{ status: string }>(`${this.base}/health`)

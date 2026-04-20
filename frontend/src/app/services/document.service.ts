@@ -44,7 +44,42 @@ export class DocumentService {
   private readonly STORAGE_KEY = 'sparky_documents';
 
   constructor(private api: ApiService) {
-    this._loadFromStorage();
+    this._loadFromDb();
+  }
+
+  /** Charge les documents depuis PostgreSQL via l'API. Fallback sur localStorage. */
+  private _loadFromDb(): void {
+    this._loading.set(true);
+    this.api.getDocuments().subscribe({
+      next: (docs: any[]) => {
+        const cards: DocumentCard[] = docs.map(d => ({
+          document_id:    d.document_id,
+          nom_fichier:    d.nom_fichier,
+          storage_url:    d.storage_url ?? '',
+          statut:         d.statut as DocumentStatus,
+          type_document:  d.type_document,
+          score_confiance: d.score_confiance,
+          fournisseur_nom: d.fournisseur_nom,
+          montant_ttc:    d.montant_ttc,
+          numero_document: d.numero_document,
+          lignes:         d.lignes ?? [],
+          created_at:     d.created_at,
+        }));
+        this._documents.set(cards);
+        this._saveToStorage(cards);   // sync localStorage aussi
+        this._loading.set(false);
+      },
+      error: () => {
+        // API indisponible → fallback localStorage
+        this._loadFromStorage();
+        this._loading.set(false);
+      },
+    });
+  }
+
+  /** Recharge la liste depuis PostgreSQL (après un nouveau scan par exemple). */
+  refreshFromDb(): void {
+    this._loadFromDb();
   }
 
   private _loadFromStorage(): void {
@@ -77,6 +112,7 @@ export class DocumentService {
 
     return this.api.processDocument(file).pipe(
       tap(result => {
+        // Ajout immédiat en local pour feedback rapide
         const card = this._buildCard(result);
         this._documents.update(docs => {
           const updated = [card, ...docs];
@@ -84,6 +120,8 @@ export class DocumentService {
           return updated;
         });
         this._loading.set(false);
+        // Puis synchronisation avec PostgreSQL
+        this.refreshFromDb();
       }),
       catchError(err => {
         this._error.set(err.message);
