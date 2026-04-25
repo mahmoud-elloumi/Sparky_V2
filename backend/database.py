@@ -29,38 +29,12 @@ async def get_db():
 
 
 async def init_db() -> None:
-    """Create all tables if they don't exist yet (safe to call multiple times)."""
-    # Import ORM models so Base.metadata is populated
-    import orm_models  # noqa: F401
+    """
+    Verifie la connexion PostgreSQL.
+    Les tables + types sont déjà créés par database/schema.sql (executer manuellement).
+    Cette fonction ne fait qu'un PING pour valider que la DB est accessible.
+    """
     from sqlalchemy import text
 
-    async with engine.begin() as conn:
-        # Ensure required PostgreSQL extensions exist
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pg_trgm"'))
-
-        # Create ENUM types (ignore if already exist)
-        await conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE document_type AS ENUM
-                    ('facture','bon_livraison','bon_commande','avoir','devis');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$
-        """))
-        await conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE document_status AS ENUM
-                    ('pending','classified','extracted','error');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$
-        """))
-        await conn.execute(text("""
-            DO $$ BEGIN
-                CREATE TYPE mouvement_type AS ENUM
-                    ('entree','sortie','correction');
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$
-        """))
-
-        # Create all ORM-mapped tables
-        await conn.run_sync(Base.metadata.create_all)
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))

@@ -1,9 +1,15 @@
+import json
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
-from typing import List, Union
+from typing import List
 
 
 class Settings(BaseSettings):
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": False,
+    }
+
     app_env: str = "development"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
@@ -35,17 +41,12 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             stripped = v.strip()
             if stripped.startswith("["):
-                import json
                 try:
                     return json.loads(stripped)
                 except Exception:
                     pass
             return [s.strip() for s in stripped.split(",") if s.strip()]
         return v
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 settings = Settings()

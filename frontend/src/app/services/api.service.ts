@@ -89,6 +89,15 @@ export class ApiService {
       .pipe(catchError(this.handleError));
   }
 
+  login(email: string, password: string): Observable<{ user_id: string; email: string; nom: string; role: string }> {
+    return this.http
+      .post<{ user_id: string; email: string; nom: string; role: string }>(
+        `${this.base}/auth/login`,
+        { email, password },
+      )
+      .pipe(catchError(this.handleError));
+  }
+
   health(): Observable<{ status: string }> {
     return this.http
       .get<{ status: string }>(`${this.base}/health`)

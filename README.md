@@ -1,103 +1,183 @@
-# SPARKY — Document Intelligence for Photovoltaïques
+# SPARKY
 
-Application web angulaire de gestion documentaire intelligente pour la filière photovoltaïque.
-
-## Architecture
-
-```
-sparky/
-├── frontend/          # Angular 17 — Interface utilisateur
-├── backend/           # Python FastAPI — API IA
-├── n8n/               # Workflow n8n importable
-└── database/          # Schema PostgreSQL
-```
+Plateforme web d'intelligence documentaire pour le secteur photovoltaïque. Scanne, classifie et extrait automatiquement les données de factures, devis, bons de livraison, bons de commande et avoirs grâce à Mistral AI.
 
 ## Stack technique
 
 | Couche | Technologie |
-|---|---|
-| Frontend | Angular 17, Angular Material |
-| Backend | Python FastAPI, Google Document AI |
-| Middleware | n8n (webhooks + workflows) |
-| Base de données | PostgreSQL + Supabase Storage |
+|--------|-------------|
+| Frontend | Angular 17 (Signals, Material) |
+| Backend | FastAPI + Python 3.12 |
+| Base de données | PostgreSQL 18 |
+| ORM | SQLAlchemy async + asyncpg |
+| IA | Mistral AI (`mistral-small-latest` + `pixtral-12b-2409`) |
+| Workflow | n8n (notifications email + export Google Sheets) |
+| Authentification | bcrypt + PostgreSQL |
 
-## 5 catégories de documents
+## Fonctionnalités
 
-| Type | Description |
-|---|---|
-| Facture | Facture fournisseur avec lignes |
-| Bon de livraison | Bon de livraison avec suivi |
-| Bon de commande | Commande fournisseur |
-| Avoir | Note de crédit / avoir |
-| Devis | Proposition commerciale avec comparaison de prix |
+- **Scan multi-format** : PDF, JPG, PNG, TIFF
+- **Classification automatique** : facture / devis / bon de livraison / bon de commande / avoir
+- **Extraction structurée** : fournisseur, n° document, dates, montants HT/TVA/TTC, lignes articles
+- **Comparaison de prix** entre fournisseurs
+- **Catalogue stock** : articles + mouvements (entrées / sorties)
+- **Export Excel + Google Sheets** automatique
+- **Notification email HTML** détaillée à chaque scan via n8n
+- **Authentification** sécurisée (bcrypt, PostgreSQL)
+- **Tableau de bord** avec totaux par type, score de confiance IA
 
-## Fonctionnalités IA
+## Installation
 
-- **Classification** : identification automatique du type + score de confiance
-- **Extraction** : données structurées (références, montants, dates, fournisseur)
-- **Comparateur de prix** : compare les devis entre fournisseurs, affiche le moins cher
+### 1. Prérequis
 
-## Démarrage rapide
+- Python 3.12+
+- Node.js 18+
+- PostgreSQL 18 (`sparky_db` + utilisateur `sparky`)
+- n8n (`npm install -g n8n`)
 
-### 1. Base de données
-
-```bash
-psql -U postgres -c "CREATE DATABASE sparky_db;"
-psql -U postgres -d sparky_db -f database/schema.sql
-```
-
-### 2. Backend FastAPI
+### 2. Backend
 
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env      # Configurer les variables
-uvicorn main:app --reload --port 8000
 ```
 
-### 3. Frontend Angular
+Configure `backend/.env` :
+
+```
+DATABASE_URL=postgresql+asyncpg://sparky:sparky_pass@127.0.0.1:5432/sparky_db
+MISTRAL_API_KEY=<ta_cle>
+N8N_WEBHOOK_URL=http://localhost:5678/webhook/sparky/notify
+```
+
+### 3. Base de données
+
+Dans pgAdmin ou psql :
+
+```sql
+\i database/schema.sql
+```
+
+Crée la table `users` pour l'authentification :
+
+```sql
+CREATE TABLE users (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email         VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    nom           VARCHAR(255),
+    role          VARCHAR(50) DEFAULT 'user',
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### 4. Frontend
 
 ```bash
 cd frontend
 npm install
-ng serve --port 4200
 ```
 
-Accéder à http://localhost:4200
+### 5. Démarrage complet
 
-### 4. n8n Workflow
+Double-clic sur `start-all.bat` à la racine — démarre backend (8000), frontend (4200) et n8n (5678).
 
-1. Démarrer n8n : `npx n8n`
-2. Ouvrir http://localhost:5678
-3. Importer `n8n/workflow.json`
-4. Configurer les credentials PostgreSQL
-5. Activer le workflow
+## Utilisation
 
-## API Endpoints
+1. Ouvre http://localhost:4200
+2. Connecte-toi (crée d'abord un user via `/auth/register` ou directement en DB avec un hash bcrypt)
+3. Scanne un document via la page **Scanner** (caméra ou upload)
+4. Le document est automatiquement :
+   - Classifié + extrait par Mistral AI
+   - Sauvegardé en PostgreSQL
+   - Envoyé par email via n8n avec un tableau HTML
+   - Exporté vers Google Sheets (1 ligne par article)
+5. Visualise le résultat dans le **Tableau de bord** ou **Documents**
+
+## Architecture
+
+```
+[Frontend Angular] -> POST /process -> [FastAPI Backend]
+                                            |
+                                      [Mistral AI]
+                                            |
+                                      [PostgreSQL]
+                                            |
+                                      [Webhook n8n]
+                                            |
+                        +-------------------+-------------------+
+                        |                   |                   |
+                  [Google Sheets]      [Email HTML]          [Logs]
+```
+
+## Endpoints API principaux
 
 | Méthode | Route | Description |
-|---|---|---|
-| POST | `/upload` | Téléverser un document |
-| POST | `/classify` | Classifier le type de document |
-| POST | `/extract` | Extraire les données structurées |
-| POST | `/compare` | Comparer les prix des devis |
-| POST | `/process` | Tout-en-un : upload + classify + extract |
-| GET | `/health` | Vérifier l'état de l'API |
+|---------|-------|-------------|
+| POST | `/auth/login` | Connexion (bcrypt) |
+| POST | `/auth/register` | Création utilisateur |
+| POST | `/process` | Pipeline complet (upload + classify + extract + DB + n8n) |
+| POST | `/upload` | Upload seul |
+| POST | `/classify` | Classification Mistral |
+| POST | `/extract` | Extraction Mistral |
+| POST | `/compare` | Comparaison prix |
+| POST | `/export/excel` | Export Excel |
+| GET | `/documents?limit=N` | Liste documents extraits |
+| GET | `/articles/stock` | Catalogue stock |
+| GET | `/articles/comparaison-prix` | Comparateur fournisseurs |
+| GET | `/health` | Healthcheck |
 
-## Variables d'environnement
+## Structure du projet
 
-Copier `backend/.env.example` en `backend/.env` et configurer :
+```
+Sparky/
+├── backend/              FastAPI + services IA
+│   ├── main.py           Endpoints + auth + pipeline /process
+│   ├── config.py         Settings (Pydantic)
+│   ├── database.py       Engine SQLAlchemy async
+│   ├── orm_models.py     Modèles ORM
+│   ├── services/         Classifier, Extractor, Comparator, Normalizer
+│   └── requirements.txt
+├── frontend/             Angular 17
+│   └── src/app/
+│       ├── pages/        login, home, scanner, documents, ...
+│       └── services/     api.service, document.service, auth.service
+├── database/
+│   └── schema.sql        Schéma PostgreSQL complet (16 tables + enums)
+├── n8n/
+│   └── workflows/
+│       └── sparky_pipeline_ia_complet.json    Workflow n8n
+├── start-all.bat         Lance backend + frontend + n8n
+└── README.md
+```
 
-- `DATABASE_URL` : URL PostgreSQL
-- `SUPABASE_URL` + `SUPABASE_KEY` : Stockage Supabase
-- `GOOGLE_PROJECT_ID` + `GOOGLE_PROCESSOR_ID` : Google Document AI
-- `N8N_WEBHOOK_URL` : URL webhook n8n
+## Pipeline n8n
 
-## Développement
+À chaque scan, le backend envoie un POST au webhook n8n. Le workflow exécute :
 
-L'API fonctionne en **mode dégradé** sans Google Document AI configuré :
-- Classification par mots-clés (heuristique)
-- Extraction par expressions régulières
-- Stockage local si Supabase non configuré
+1. **Réception** du document scanné
+2. **Validation** + détection format (PDF / image)
+3. **Classification IA** (Mistral)
+4. **Extraction IA** (Mistral)
+5. **Préparation lignes** Google Sheet
+6. **Export Google Sheets** (1 ligne par article extrait)
+7. **Construction email HTML** (tableau articles + bouton lien sheet)
+8. **Envoi email** SMTP
+
+## Schéma DB principal
+
+- `users` — authentification
+- `fournisseurs` — annuaire fournisseurs
+- `documents` — table maître (tous types confondus)
+- `factures`, `devis`, `bons_commande`, `bons_livraison`, `avoirs` — données par type
+- `lignes_facture`, `lignes_devis`, `lignes_bl` — détail des articles
+- `articles` — catalogue normalisé
+- `articles_fournisseurs` — prix achat / vente par fournisseur
+- `mouvements_stock` — entrées/sorties (le stock = `SUM(quantite)`)
+
+## Auteur
+
+**Mahmoud Elloumi** — Étudiant ingénieur en informatique
+mahmoud.elloumi@enis.tn

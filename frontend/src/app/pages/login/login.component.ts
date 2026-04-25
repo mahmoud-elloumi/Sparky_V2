@@ -1,6 +1,7 @@
 import { Component, OnInit, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
+import { ApiService } from '../../services/api.service';
 
 @Component({
   selector: 'app-login',
@@ -18,7 +19,7 @@ export class LoginComponent implements OnInit {
   showPass = signal(false);
   error    = signal<string | null>(null);
 
-  constructor(private fb: FormBuilder, private router: Router) {}
+  constructor(private fb: FormBuilder, private router: Router, private api: ApiService) {}
 
   ngOnInit(): void {
     this.form = this.fb.group({
@@ -38,16 +39,18 @@ export class LoginComponent implements OnInit {
     this.loading.set(true);
     this.error.set(null);
 
-    // Simulate auth — replace with real API call
-    setTimeout(() => {
-      const { email, password } = this.form.value;
-      if (email === 'admin@sparky.tn' && password === 'sparky2026') {
-        this.router.navigate(['/home']);
-      } else {
-        this.error.set('Email ou mot de passe incorrect.');
+    const { email, password } = this.form.value;
+    this.api.login(email, password).subscribe({
+      next: (user) => {
+        localStorage.setItem('sparky_user', JSON.stringify(user));
         this.loading.set(false);
-      }
-    }, 1000);
+        this.router.navigate(['/home']);
+      },
+      error: (err) => {
+        this.error.set(err.message || 'Email ou mot de passe incorrect.');
+        this.loading.set(false);
+      },
+    });
   }
 
   togglePass(): void { this.showPass.update(v => !v); }

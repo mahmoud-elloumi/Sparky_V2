@@ -1,3 +1,4 @@
+
 @echo off
 :: Chemin du projet = dossier contenant ce fichier .bat
 set SPARKY_DIR=%~dp0

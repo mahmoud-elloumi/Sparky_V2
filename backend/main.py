@@ -86,6 +86,71 @@ app.add_middleware(
 # ROUTES
 # ============================================================
 
+# ============================================================
+# AUTH — Login avec PostgreSQL + bcrypt
+# ============================================================
+
+from pydantic import BaseModel, EmailStr
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    nom: str | None = None
+    role: str = "user"
+
+@app.post("/auth/login")
+async def auth_login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import text as _text
+    from passlib.hash import bcrypt as _bcrypt
+
+    row = await db.execute(
+        _text("SELECT id, email, password_hash, nom, role FROM users WHERE email = :e LIMIT 1"),
+        {"e": payload.email},
+    )
+    user = row.mappings().fetchone()
+    if not user or not _bcrypt.verify(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Email ou mot de passe incorrect")
+
+    return {
+        "user_id": str(user["id"]),
+        "email":   user["email"],
+        "nom":     user["nom"],
+        "role":    user["role"],
+    }
+
+
+@app.post("/auth/register")
+async def auth_register(payload: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import text as _text
+    from passlib.hash import bcrypt as _bcrypt
+
+    user_id = str(uuid.uuid4())
+    try:
+        await db.execute(
+            _text("""
+                INSERT INTO users (id, email, password_hash, nom, role)
+                VALUES (:id, :email, :hash, :nom, :role)
+            """),
+            {
+                "id": user_id,
+                "email": payload.email,
+                "hash": _bcrypt.hash(payload.password),
+                "nom": payload.nom,
+                "role": payload.role,
+            },
+        )
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=f"Utilisateur deja existant ou erreur: {e}")
+
+    return {"user_id": user_id, "email": payload.email, "nom": payload.nom, "role": payload.role}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "sparky-api", "version": "1.0.0"}
@@ -409,6 +474,7 @@ async def process_document(
 
     # Save to PostgreSQL (best-effort — ne bloque pas si DB indisponible)
     try:
+        log.info("db_save_start", document_id=document_id, type=classify_result.type_document)
         await _save_document_to_db(
             db=db,
             document_id=document_id,
@@ -417,8 +483,10 @@ async def process_document(
             classify_result=classify_result,
             extract_result=extract_result,
         )
+        log.info("db_save_ok", document_id=document_id)
     except Exception as e:
-        log.warning("db_save_failed", error=str(e))
+        import traceback
+        log.error("db_save_failed", error=str(e), trace=traceback.format_exc())
 
     return {
         "upload": upload_result,
@@ -485,21 +553,21 @@ async def get_documents(
             type_doc = r["type_document"]
             if type_doc == "facture":
                 lrows = await db.execute(_text("""
-                    SELECT designation, reference, quantite, prix_unitaire,
-                           remise_pct, tva_taux, montant_ttc
+                    SELECT lf.designation, lf.reference, lf.quantite, lf.prix_unitaire,
+                           lf.remise_pct, lf.tva_taux, lf.montant_ht AS montant_ttc
                     FROM lignes_facture lf
                     JOIN factures fa ON fa.id = lf.facture_id
                     WHERE fa.document_id = :doc
-                    ORDER BY position
+                    ORDER BY lf.position
                 """), {"doc": doc_id})
             elif type_doc == "devis":
                 lrows = await db.execute(_text("""
-                    SELECT designation, reference, quantite, prix_unitaire,
-                           remise_pct, NULL AS tva_taux, montant_ttc
+                    SELECT ld.designation, ld.reference, ld.quantite, ld.prix_unitaire,
+                           ld.remise_pct, NULL AS tva_taux, ld.montant_ht AS montant_ttc
                     FROM lignes_devis ld
                     JOIN devis dv ON dv.id = ld.devis_id
                     WHERE dv.document_id = :doc
-                    ORDER BY position
+                    ORDER BY ld.position
                 """), {"doc": doc_id})
             else:
                 lrows = None
@@ -777,7 +845,8 @@ async def _save_document_to_db(
     from datetime import date as _date
 
     donnees = extract_result.donnees or {}
-    type_doc = classify_result.type_document
+    _type_raw = classify_result.type_document
+    type_doc = _type_raw.value if hasattr(_type_raw, "value") else str(_type_raw)
     score = float(classify_result.score_confiance)
     fournisseur_nom = donnees.get("fournisseur_nom") or donnees.get("fournisseur") or ""
 
@@ -798,11 +867,20 @@ async def _save_document_to_db(
                 {"id": fourn_id, "nom": fournisseur_nom},
             )
 
-    def _parse_date(val) -> str | None:
+    def _parse_date(val):
+        """Retourne datetime.date ou None. Gere YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY."""
+        from datetime import date as _d, datetime as _dt
         if not val:
             return None
-        s = str(val)[:10]
-        return s if len(s) == 10 else None
+        if isinstance(val, _d):
+            return val
+        s = str(val).strip()[:10]
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d"):
+            try:
+                return _dt.strptime(s, fmt).date()
+            except ValueError:
+                continue
+        return None
 
     def _dec(val):
         try:
@@ -826,7 +904,7 @@ async def _save_document_to_db(
             "id": document_id,
             "nom": nom_fichier,
             "url": storage_url,
-            "type": str(type_doc),
+            "type": type_doc,
             "score": score,
             "fourn": fourn_id,
         },
@@ -861,9 +939,9 @@ async def _save_document_to_db(
                 _text("""
                     INSERT INTO lignes_facture
                         (id, facture_id, designation, reference, quantite,
-                         prix_unitaire, remise_pct, tva_taux, montant_ttc, position)
+                         prix_unitaire, remise_pct, tva_taux, montant_ht, position)
                     VALUES
-                        (:id, :fac, :des, :ref, :qty, :pu, :rem, :tva, :ttc, :pos)
+                        (:id, :fac, :des, :ref, :qty, :pu, :rem, :tva, :mt, :pos)
                 """),
                 {
                     "id": str(uuid.uuid4()), "fac": fac_id,
@@ -873,7 +951,7 @@ async def _save_document_to_db(
                     "pu":  _dec(l.get("prix_unitaire")),
                     "rem": _dec(l.get("remise_pct") or l.get("remise")),
                     "tva": _dec(l.get("tva_taux") or l.get("tva")),
-                    "ttc": _dec(l.get("montant_ttc")),
+                    "mt":  _dec(l.get("montant_ttc") or l.get("montant_ht")),
                     "pos": i,
                 },
             )
@@ -901,9 +979,9 @@ async def _save_document_to_db(
                 _text("""
                     INSERT INTO lignes_devis
                         (id, devis_id, designation, reference, quantite,
-                         prix_unitaire, remise_pct, montant_ttc, position)
+                         prix_unitaire, remise_pct, montant_ht, position)
                     VALUES
-                        (:id, :dev, :des, :ref, :qty, :pu, :rem, :ttc, :pos)
+                        (:id, :dev, :des, :ref, :qty, :pu, :rem, :mt, :pos)
                 """),
                 {
                     "id": str(uuid.uuid4()), "dev": dev_id,
@@ -912,7 +990,7 @@ async def _save_document_to_db(
                     "qty": _dec(l.get("quantite")),
                     "pu":  _dec(l.get("prix_unitaire")),
                     "rem": _dec(l.get("remise_pct") or l.get("remise")),
-                    "ttc": _dec(l.get("montant_ttc")),
+                    "mt":  _dec(l.get("montant_ttc") or l.get("montant_ht")),
                     "pos": i,
                 },
             )
@@ -972,6 +1050,24 @@ async def _save_document_to_db(
     log.info("db.document_saved", document_id=document_id, type=str(type_doc))
 
 
+def _json_safe(obj):
+    """Convertit Decimal/Enum/date en types JSON-serialisables."""
+    from decimal import Decimal
+    from datetime import date, datetime
+    from enum import Enum
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    return obj
+
+
 async def _notify_n8n(payload: dict) -> None:
     if not settings.n8n_webhook_url:
         return
@@ -979,7 +1075,7 @@ async def _notify_n8n(payload: dict) -> None:
         async with httpx.AsyncClient(timeout=5) as client:
             await client.post(
                 settings.n8n_webhook_url,
-                json=payload,
+                json=_json_safe(payload),
                 headers={"X-Sparky-Secret": settings.n8n_webhook_secret},
             )
     except Exception as e:
