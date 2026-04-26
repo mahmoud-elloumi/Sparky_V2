@@ -179,15 +179,6 @@ async def upload_document(file: UploadFile = File(...)):
     # Upload to Supabase Storage
     storage_url = await _upload_to_supabase(document_id, file.filename, file_content, file.content_type)
 
-    # Notify n8n
-    await _notify_n8n({
-        "event": "document_uploaded",
-        "document_id": document_id,
-        "storage_url": storage_url,
-        "nom_fichier": file.filename,
-        "mime_type": file.content_type,
-    })
-
     return DocumentUploadResponse(
         document_id=document_id,
         storage_url=storage_url,
@@ -216,14 +207,6 @@ async def classify_document(request: ClassifyRequest):
         document_id=request.document_id,
     )
 
-    # Notify n8n
-    await _notify_n8n({
-        "event": "document_classified",
-        "document_id": request.document_id,
-        "type_document": result.type_document,
-        "score_confiance": result.score_confiance,
-    })
-
     return result
 
 
@@ -247,14 +230,6 @@ async def extract_document(request: ExtractRequest):
         document_id=request.document_id,
         type_document=request.type_document,
     )
-
-    # Notify n8n
-    await _notify_n8n({
-        "event": "document_extracted",
-        "document_id": request.document_id,
-        "type_document": request.type_document,
-        "donnees": result.donnees,
-    })
 
     return result
 

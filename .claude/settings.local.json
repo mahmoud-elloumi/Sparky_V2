@@ -44,7 +44,24 @@
       "Bash(psql -U sparky -d sparky_db -h 127.0.0.1 -c \"SELECT COUNT\\(*\\) FROM documents;\")",
       "Bash(curl -s -X POST http://localhost:8000/process -F \"file=@c:/Sparky/backend/test_facture.pdf\")",
       "Bash(psql -U sparky -d sparky_db -h 127.0.0.1 -c \"SELECT id, nom_fichier, type_document FROM documents;\")",
-      "Bash(curl -s http://localhost:8000/documents?limit=100)"
+      "Bash(curl -s http://localhost:8000/documents?limit=100)",
+      "Bash(git status *)",
+      "PowerShell(node --version 2>&1)",
+      "PowerShell($proc = Start-Process -FilePath \"powershell.exe\" -ArgumentList \"-NoProfile\",\"-Command\",\"winget uninstall OpenJS.NodeJS.LTS --silent --accept-source-agreements\" -Verb RunAs -Wait -PassThru -WindowStyle Hidden; \"ExitCode: $\\($proc.ExitCode\\)\")",
+      "Read(//c/Sparky_v2/**)",
+      "Read(//c/Sparky_v2/frontend/**)",
+      "Bash(/c/Sparky_v2/backend/venv/Scripts/python.exe --version)",
+      "Bash(/c/Sparky/backend/venv/Scripts/python.exe -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(/c/Sparky/backend/venv/Scripts/python.exe -c \"import PIL; print\\('Pillow', PIL.__version__\\)\")",
+      "Bash(rm -rf /c/Sparky_v2/backend/venv)",
+      "Bash(py -3.12 -m venv venv)",
+      "Bash(./venv/Scripts/pip.exe install *)",
+      "Bash(/c/Sparky_v2/backend/venv/Scripts/python.exe -c \"import fastapi, sqlalchemy, mistralai, passlib, bcrypt, email_validator; print\\('All imports OK'\\)\")",
+      "Bash(./venv/Scripts/uvicorn.exe main:app --host 0.0.0.0 --port 8000)",
+      "Bash(findstr :8000)"
+    ],
+    "additionalDirectories": [
+      "C:\\Sparky"
     ]
   }
 }
