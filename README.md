@@ -80,7 +80,34 @@ npm install
 
 ## 🏗️ Architecture et Diagrammes
 
-Une documentation visuelle complète de l'architecture et des processus est disponible dans le dossier `docs/diagrams/`.
+L'application suit une architecture 3-tiers moderne complétée par des services d'Intelligence Artificielle et d'automatisation :
+
+```text
+   ┌─────────────────────┐
+   │  Frontend Angular   │ ← localStorage (cache)
+   │  http://localhost   │
+   └────────┬────────────┘
+            │ POST /process
+            ▼
+   ┌─────────────────────┐
+   │  FastAPI Backend    │
+   │  http://localhost:8000
+   └────┬───────┬───────┬┘
+        │       │       │
+        ▼       ▼       ▼
+   ┌─────────┐ ┌────────────┐ ┌───────────────┐
+   │Mistral AI│ │PostgreSQL │ │  n8n webhook  │
+   │ Vision   │ │ sparky_db │ │   (5678)      │
+   │ + Text   │ └────────────┘ └──┬──────┬─────┘
+   └─────────┘                    │      │
+                                  ▼      ▼
+                         ┌──────────────┐ ┌────────────────┐
+                         │ Google Sheets│ │  Email HTML    │
+                         │   (export)   │ │  (Gmail SMTP)  │
+                         └──────────────┘ └────────────────┘
+```
+
+Une documentation visuelle complète est également disponible dans le dossier `docs/diagrams/`.
 
 **Principaux diagrammes PlantUML (.puml / .svg) inclus :**
 - `01_use_cases.puml` : Diagramme des cas d'utilisation
