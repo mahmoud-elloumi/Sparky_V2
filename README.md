@@ -28,7 +28,7 @@ Plateforme web d'intelligence documentaire pour le secteur photovoltaïque tunis
 |--------|-------------|
 | Frontend | **Angular 20.3** (Signals, Material 3, RxJS 7.8) |
 | Backend | FastAPI + Python 3.12 |
-| Base de données | PostgreSQL 18 |
+| Base de données | PostgreSQL 16 |
 | ORM | SQLAlchemy async + asyncpg |
 | IA | Mistral AI (`mistral-small-latest` + `pixtral-12b-2409`) |
 | Workflow | n8n (notifications email + export Google Sheets) |
@@ -57,7 +57,7 @@ Les services seront accessibles sur :
 
 ### Option 2 : Installation manuelle (Développement)
 
-**Prérequis** : Python 3.12+, Node.js 24 LTS, PostgreSQL 18, n8n globalement installé.
+**Prérequis** : Python 3.12+, Node.js 24 LTS, PostgreSQL 16, n8n globalement installé.
 
 1. **Base de données** : Créez une DB `sparky_db` avec un utilisateur `sparky`, et exécutez `\i database/schema.sql`.
 2. **Backend** :
